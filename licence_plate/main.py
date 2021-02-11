@@ -26,6 +26,11 @@ channel = 1
 img_rows = 100
 img_cols = 75
 
+dictionary = {0:'0', 1:'1', 2 :'2', 3:'3', 4:'4', 5:'5', 6:'6', 7:'7', 8:'8', 9:'9', 10:'A',
+    11:'B', 12:'C', 13:'D', 14:'E', 15:'F', 16:'G', 17:'H', 18:'I', 19:'J', 20:'K',
+    21:'L', 22:'M', 23:'N', 24:'P', 25:'Q', 26:'R', 27:'S', 28:'T', 29:'U',
+    30:'V', 31:'W', 32:'X', 33:'Y', 34:'Z'}
+
 
 def load_data():
     train_datagen = ImageDataGenerator(
@@ -50,7 +55,6 @@ def load_data():
 
     return train_generator, validation_generator
 
-
 def auto_canny(image, sigma=0.33):
     # compute the median of the single channel pixel intensities
     v = np.median(image)
@@ -73,7 +77,7 @@ def create_model():
     model.add(layers.Flatten())
     model.add(layers.Dense(64, activation='relu'))
     model.add(layers.Dense(35, activation='softmax'))
-    model.summary()
+    # model.summary()
 
     opt = optimizers.Adam()
 
@@ -83,7 +87,50 @@ def create_model():
 
     return model
 
+def resect_plate(img):
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)  # convert to grey scale
+
+    gray = cv2.bilateralFilter(gray, 13, 15, 15)
+
+    edged = cv2.Canny(gray, 30, 200)  # Perform Edge detection
+
+    contours = cv2.findContours(edged.copy(), cv2.RETR_TREE,
+                                cv2.CHAIN_APPROX_SIMPLE)
+    contours = imutils.grab_contours(contours)
+    contours = sorted(contours, key=cv2.contourArea, reverse=True)[:10]
+
+    possibleContoures = []
+
+    for c in contours:
+        # approximate the contour
+        peri = cv2.arcLength(c, True)
+        approx = cv2.approxPolyDP(c, 0.018 * peri, True)
+        # if our approximated contour has four points, then
+        # we can assume that we have found our screen
+        if len(approx) == 4:
+            hull = cv2.convexHull(approx, returnPoints=True)
+            rectness = rectangleness(hull)
+            possibleContoures.append((rectness, approx))
+
+    val = max(possibleContoures, key=lambda item: item[0])[1]
+
+    # Masking the part other than the number plate
+    mask = np.zeros(gray.shape, np.uint8)
+    cv2.drawContours(mask, [val], 0, 255, -1, )
+    cv2.bitwise_and(img, img, mask=mask)
+
+    (x, y) = np.where(mask == 255)
+    (topx, topy) = (np.min(x), np.min(y))
+    (bottomx, bottomy) = (np.max(x), np.max(y))
+    cropped_image = gray[topx:bottomx + 1, topy:bottomy + 1]
+
+    return cropped_image
+
 def process_video(video_path):
+    model = create_model()
+    print("[ LOADING WEIGHTS... ]")
+    model.load_weights("trying_final.h5")
+    print("[ WEIGHTS LOADED! ]")
 
     # ucitavanje videa
     frame_num = 0
@@ -98,79 +145,67 @@ def process_video(video_path):
         if not ret_val:
             break
 
-        img = frame
+        try:
+            cropped_image = resect_plate(frame)
 
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)  # convert to grey scale
-
-        gray = cv2.bilateralFilter(gray, 13, 15, 15)
-
-
-        edged = cv2.Canny(gray, 30, 200)  # Perform Edge detection
-        # plt.imshow(edged)
-        # plt.show()
-        contours = cv2.findContours(edged.copy(), cv2.RETR_TREE,
-                                    cv2.CHAIN_APPROX_SIMPLE)
-        contours = imutils.grab_contours(contours)
-        contours = sorted(contours, key=cv2.contourArea, reverse=True)[:10]
-        screenCnt = None
-
-        possibleContoures = []
-        for c in contours:
-            # approximate the contour
-            peri = cv2.arcLength(c, True)
-            approx = cv2.approxPolyDP(c, 0.018 * peri, True)
-            # if our approximated contour has four points, then
-            # we can assume that we have found our screen
-            if len(approx) == 4:
-                hull = cv2.convexHull(approx, returnPoints=True)
-                rectness = rectangleness(hull)
-                print(rectness, approx)
-                possibleContoures.append((rectness, approx))
-                # screenCnt = approx
-                # break
-
-        val = max(possibleContoures,key=lambda item:item[0])[1]
-
-
-        # plt.imshow(img)
-        # plt.show()
-
-        # Masking the part other than the number plate
-        mask = np.zeros(gray.shape, np.uint8)
-        new_image = cv2.drawContours(mask, [val], 0, 255, -1, )
-        new_image = cv2.bitwise_and(img, img, mask=mask)
-
-        (x, y) = np.where(mask == 255)
-        (topx, topy) = (np.min(x), np.min(y))
-        (bottomx, bottomy) = (np.max(x), np.max(y))
-        cropped_image = gray[topx:bottomx + 1, topy:bottomy + 1]
-
-        #edged = cv2.Canny(cropped_image, 10, 100)  # Perform Edge detection
-        #
-        #cropped_image = dilate(cropped_image)
-        cropped_image = cv2.adaptiveThreshold(edged,255,cv2.ADAPTIVE_THRESH_MEAN_C,\
-            cv2.THRESH_BINARY,11,2)
-
-        plt.imshow(cropped_image, cmap='gray')
-        plt.show()
-        contours = cv2.findContours(cropped_image.copy(), cv2.RETR_LIST,
-                                    cv2.CHAIN_APPROX_SIMPLE)
-        contours = imutils.grab_contours(contours)
-        contours = sorted(contours, key=cv2.contourArea, reverse=True)[:10]
-        rect = [cv2.boundingRect(contour) for contour in contours]
-        for c in contours:
-            x, y, w, h = cv2.boundingRect(c)
-            cv2.rectangle(cropped_image, (x, y), (x + w, y + h), (122, 122, 232), 2)
-
-        plt.imshow(cropped_image)
-        plt.show()
-
-        # plt.imshow(cropped_image)
-        # plt.show()
-        break
+            find_characters_contures(cropped_image, model)
+            plt.imshow(cropped_image)
+            plt.show()
+        except:
+            continue
 
     cap.release()
     return True
+
+def find_characters_contures(cropped_image, model):
+    real_img = cropped_image.copy()
+    cropped_image = cv2.adaptiveThreshold(cropped_image, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 11, 2)
+
+    contours = cv2.findContours(cropped_image.copy(), cv2.RETR_LIST,
+                                cv2.CHAIN_APPROX_SIMPLE)
+    contours = imutils.grab_contours(contours)
+
+    contours = sorted(contours, key=cv2.contourArea, reverse=True)[:10]
+    contours = sorted(contours, key=lambda ctr: cv2.boundingRect(ctr)[0])
+    i = 0
+    preds = []
+    for c in contours:
+
+        x, y, w, h = cv2.boundingRect(c)
+        cv2.rectangle(real_img, (x, y), (x + w, y + h), (122, 122, 232), 1)
+
+        peri = cv2.arcLength(c, True)
+        approx = cv2.approxPolyDP(c, 0.018 * peri, True)
+
+        img_cpy = real_img.copy()
+        smoothed = cv2.GaussianBlur(img_cpy, (9, 9), 10)
+        img_cpy = cv2.addWeighted(img_cpy, 1.5, smoothed, -0.5, 0)
+
+        # e,img_cpy = cv2.threshold(img_cpy,80,255,cv2.THRESH_BINARY)
+        if i != 0:
+            mask = np.zeros(img_cpy.shape, np.uint8)
+            cv2.drawContours(mask, [approx], 0, 255, -1, )
+            cv2.bitwise_and(img_cpy, img_cpy, mask=mask)
+
+            (x, y) = np.where(mask == 255)
+            (topx, topy) = (np.min(x), np.min(y))
+            (bottomx, bottomy) = (np.max(x), np.max(y))
+            img_cpy = img_cpy[topx:bottomx + 1, topy:bottomy + 1]
+            img_cpy = cv2.cvtColor(img_cpy,cv2.COLOR_GRAY2RGB)
+            plt.imshow(img_cpy)
+            plt.show()
+            img_cpy = cv2.resize(img_cpy, (img_rows, img_cols))
+            img_cpy = np.reshape(img_cpy, (1, img_rows, img_cols, 3))
+            prediction = model.predict_classes(img_cpy)
+            preds.append(dictionary[prediction[0]])
+        else:
+            i = i + 1
+    for p in preds:
+        print(p, end=" ")
+
+    print("---------------------------")
+    return cropped_image
+
 def dilate(image):
     kernel = np.ones((3, 3)) # strukturni element 3x3 blok
     return cv2.dilate(image, kernel, iterations=1)
@@ -190,7 +225,7 @@ def rectangleness(hull):
     return rectangleness
 
 if __name__ == '__main__':
-    process_video("./data/video_Trim.mp4")
+    process_video("./data/vid1.MOV")
 
     # model = create_model()
     #
