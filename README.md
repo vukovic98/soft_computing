@@ -8,7 +8,7 @@
 Depedencies:
   - Numpy
   - Tensorflow + Keras
-  - Opencv
+  - OpenCV
   - Imutils
   
   Pokretanje projekta:
