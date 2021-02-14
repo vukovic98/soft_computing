@@ -1,6 +1,8 @@
 import glob
-import os
+import os, sys
 
+import pytesseract as pytesseract
+import tensorflow
 import tensorflow as tf
 from sklearn.preprocessing import LabelBinarizer
 from tensorflow.keras import regularizers
@@ -18,6 +20,7 @@ from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Conv2D, Conv3D, MaxPooling2D, MaxPool2D, AveragePooling2D, MaxPooling3D, Dense, Dropout, Input, Flatten, SeparableConv2D
 from tensorflow.keras.layers import Activation
 from tensorflow.keras import regularizers, optimizers, losses, models, layers
+from keras.optimizers import SGD
 
 width = 75
 height = 100
@@ -29,8 +32,16 @@ img_cols = 75
 dictionary = {0:'0', 1:'1', 2 :'2', 3:'3', 4:'4', 5:'5', 6:'6', 7:'7', 8:'8', 9:'9', 10:'A',
     11:'B', 12:'C', 13:'D', 14:'E', 15:'F', 16:'G', 17:'H', 18:'I', 19:'J', 20:'K',
     21:'L', 22:'M', 23:'N', 24:'P', 25:'Q', 26:'R', 27:'S', 28:'T', 29:'U',
-    30:'V', 31:'W', 32:'X', 33:'Y', 34:'Z'}
+    30:'V', 31:'W', 32:'X', 33:'Y', 34:'Z',35:'-'}
 
+resultDictionary = {}
+
+def load_image(path):
+    return cv2.cvtColor(cv2.imread(path), cv2.COLOR_BGR2GRAY)
+
+def customThrash(image):
+    ret, img = cv2.threshold(image, 0, 255, cv2.THRESH_OTSU | cv2.THRESH_BINARY_INV)
+    return img
 
 def load_data():
     train_datagen = ImageDataGenerator(
@@ -45,12 +56,14 @@ def load_data():
         'letter_dataset/train',
         target_size=(img_rows, img_cols),
         batch_size=32,
+        color_mode='grayscale',
         class_mode='categorical')
 
     validation_generator = test_datagen.flow_from_directory(
         'letter_dataset/val',
         target_size=(img_rows, img_cols),
         batch_size=32,
+        color_mode='grayscale',
         class_mode='categorical')
 
     return train_generator, validation_generator
@@ -69,14 +82,14 @@ def auto_canny(image, sigma=0.33):
 
 def create_model():
     model = models.Sequential()
-    model.add(layers.Conv2D(32, (3, 3), activation='relu', input_shape=(height, width, 3)))
+    model.add(layers.Conv2D(32, (3, 3), activation='relu', input_shape=(height, width, 1)))
     model.add(layers.MaxPooling2D((2, 2)))
     model.add(layers.Conv2D(64, (3, 3), activation='relu'))
     model.add(layers.MaxPooling2D((2, 2)))
     model.add(layers.Conv2D(64, (3, 3), activation='relu'))
     model.add(layers.Flatten())
     model.add(layers.Dense(64, activation='relu'))
-    model.add(layers.Dense(35, activation='softmax'))
+    model.add(layers.Dense(36, activation='softmax'))
     # model.summary()
 
     opt = optimizers.Adam()
@@ -94,24 +107,39 @@ def resect_plate(img):
 
     edged = cv2.Canny(gray, 30, 200)  # Perform Edge detection
 
+    # plt.imshow(edged)
+    # plt.show()
+
     contours = cv2.findContours(edged.copy(), cv2.RETR_TREE,
                                 cv2.CHAIN_APPROX_SIMPLE)
     contours = imutils.grab_contours(contours)
-    contours = sorted(contours, key=cv2.contourArea, reverse=True)[:10]
+    contours = sorted(contours, key=cv2.contourArea, reverse=True)[:8]
 
     possibleContoures = []
 
     for c in contours:
+        x, y, w, h = cv2.boundingRect(c)
+        # Draw the rectangle
+        cv2.rectangle(img, (x, y), (x + w, y + h), (255, 0, 0), 3)
+        # plt.imshow(img)
+        # plt.show()
         # approximate the contour
         peri = cv2.arcLength(c, True)
-        approx = cv2.approxPolyDP(c, 0.018 * peri, True)
+        approx = cv2.approxPolyDP(c, 0.08 * peri, True)
+
+        print(len(approx))
+
         # if our approximated contour has four points, then
         # we can assume that we have found our screen
-        if len(approx) == 4:
-            hull = cv2.convexHull(approx, returnPoints=True)
-            rectness = rectangleness(hull)
+        # if len(approx) == 4:
+        hull = cv2.convexHull(approx, returnPoints=True)
+        rectness = rectangleness(hull)
+
+        if w > h:
             possibleContoures.append((rectness, approx))
 
+    if len(possibleContoures) == 0:
+        return None
     val = max(possibleContoures, key=lambda item: item[0])[1]
 
     # Masking the part other than the number plate
@@ -124,7 +152,25 @@ def resect_plate(img):
     (bottomx, bottomy) = (np.max(x), np.max(y))
     cropped_image = gray[topx:bottomx + 1, topy:bottomy + 1]
 
-    return cropped_image
+    ret, thresh = cv2.threshold(cropped_image, 127, 255, 0)
+    contours, _ = cv2.findContours(thresh, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+    areas = [cv2.contourArea(c) for c in contours]
+    if (len(areas) != 0):
+        max_index = np.argmax(areas)
+        cnt = contours[max_index]
+        x, y, w, h = cv2.boundingRect(cnt)
+        bounds = cv2.boundingRect(cnt)
+        cv2.rectangle(cropped_image, (x, y), (x + w, y + h), (0, 255, 0), 2)
+        secondCrop = cropped_image[y:y + h, x:x + w]
+    else:
+        secondCrop = cropped_image
+
+    # plt.imshow(secondCrop)
+    # plt.show()
+    return secondCrop
+
+alphabet = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
+             "A", "B", "Ć", "Č", "C", "D", "Đ", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "R", "Š", "S", "T", "U", "V", "W", "X", "Y", "Ž" ,"Z"]
 
 def process_video(video_path):
     model = create_model()
@@ -140,38 +186,82 @@ def process_video(video_path):
     while True:
         frame_num += 1
         ret_val, frame = cap.read()
-
+        # plt.imshow(frame)
+        # plt.show()
         # ako frejm nije zahvacen
         if not ret_val:
             break
 
-        try:
-            cropped_image = resect_plate(frame)
 
+        cropped_image = resect_plate(frame)
+        if cropped_image is None:
+            print("Failed to find plate on this frame.")
+        else:
+        # plt.imshow(cropped_image)
+        # plt.show()
+            pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract'
+            print(pytesseract.image_to_string(cropped_image))
             find_characters_contures(cropped_image, model)
-            plt.imshow(cropped_image)
-            plt.show()
-        except:
-            continue
+
 
     cap.release()
     return True
 
 def find_characters_contures(cropped_image, model):
     real_img = cropped_image.copy()
+
     cropped_image = cv2.adaptiveThreshold(cropped_image, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 11, 2)
 
-    contours = cv2.findContours(cropped_image.copy(), cv2.RETR_LIST,
+    # plt.imshow(cropped_image)
+    # plt.show()
+
+    contours = cv2.findContours(cropped_image.copy(), cv2.RETR_TREE,
                                 cv2.CHAIN_APPROX_SIMPLE)
     contours = imutils.grab_contours(contours)
 
-    contours = sorted(contours, key=cv2.contourArea, reverse=True)[:10]
+
+
+    contours = sorted(contours, key=cv2.contourArea, reverse=True)[:12]
     contours = sorted(contours, key=lambda ctr: cv2.boundingRect(ctr)[0])
+
+    contours.remove(contours[0])
+
+    i = 0
+    rejected = []
+    for c in contours:
+        x, y, w, h = cv2.boundingRect(c)
+        if w > h:
+            i = i + 1
+            continue
+        for c1 in contours:
+            x1, y1, w1, h1 = cv2.boundingRect(c1)
+            if w1 > h1:
+                continue
+            if np.array_equal(c, c1):
+                print("equal")
+                continue
+
+            if x1 < x+w/2 < x1 + w1 and y1 < y+h/2 < y1 + h1:
+                print(str(x+w/2) + ", " + str(y+h/2) + ", " + str(x1) + ", " + str(x1 + w1) + ", " + str(
+                    y1) + ", " + str(y1 + h1))
+                if w < w1:
+                    rejected.append(i)
+        i = i + 1
+
+    print(rejected)
+
+    for index in reversed(rejected):
+        if(index < len(contours)):
+            contours = np.delete(contours,index)
     i = 0
     preds = []
-    for c in contours:
 
+    to_predict = []
+    for c in contours:
         x, y, w, h = cv2.boundingRect(c)
+        if w > h:
+            continue
+
         cv2.rectangle(real_img, (x, y), (x + w, y + h), (122, 122, 232), 1)
 
         peri = cv2.arcLength(c, True)
@@ -181,27 +271,54 @@ def find_characters_contures(cropped_image, model):
         smoothed = cv2.GaussianBlur(img_cpy, (9, 9), 10)
         img_cpy = cv2.addWeighted(img_cpy, 1.5, smoothed, -0.5, 0)
 
-        # e,img_cpy = cv2.threshold(img_cpy,80,255,cv2.THRESH_BINARY)
-        if i != 0:
-            mask = np.zeros(img_cpy.shape, np.uint8)
-            cv2.drawContours(mask, [approx], 0, 255, -1, )
-            cv2.bitwise_and(img_cpy, img_cpy, mask=mask)
+        e,img_cpy = cv2.threshold(img_cpy,80,255,cv2.THRESH_BINARY)
+        plt.imshow(real_img)
+        plt.show()
+        #if i != 0:
+        mask = np.zeros(img_cpy.shape, np.uint8)
+        cv2.drawContours(mask, [approx], 0, 255, -1, )
+        cv2.bitwise_and(img_cpy, img_cpy, mask=mask)
+        # plt.imshow(img_cpy)
+        # plt.show()
+        (x, y) = np.where(mask == 255)
+        (topx, topy) = (np.min(x), np.min(y))
+        (bottomx, bottomy) = (np.max(x), np.max(y))
+        img_cpy = img_cpy[topx:bottomx + 1, topy:bottomy + 1]
+        #img_cpy = cv2.cvtColor(img_cpy,cv2.COLOR_GRAY2RGB)
+        # plt.imshow(img_cpy)
+        # plt.show()
+        img_cpy = cv2.resize(img_cpy, (img_cols, img_rows))
+        img_cpy = np.reshape(img_cpy, (1, img_rows, img_cols, 1))
+        to_predict.append(img_cpy)
+        prediction = model.predict(img_cpy)
 
-            (x, y) = np.where(mask == 255)
-            (topx, topy) = (np.min(x), np.min(y))
-            (bottomx, bottomy) = (np.max(x), np.max(y))
-            img_cpy = img_cpy[topx:bottomx + 1, topy:bottomy + 1]
-            img_cpy = cv2.cvtColor(img_cpy,cv2.COLOR_GRAY2RGB)
-            plt.imshow(img_cpy)
-            plt.show()
-            img_cpy = cv2.resize(img_cpy, (img_rows, img_cols))
-            img_cpy = np.reshape(img_cpy, (1, img_rows, img_cols, 3))
-            prediction = model.predict_classes(img_cpy)
-            preds.append(dictionary[prediction[0]])
-        else:
-            i = i + 1
+        # plt.imshow(img_cpy)
+        # plt.show()
+        try:
+            print(dictionary[np.where(prediction[0] == 1)[0][0]])
+            preds.append(dictionary[np.where(prediction[0] == 1)[0][0]])
+        except:
+            continue
+        #else:
+         #   i = i + 1
+
+    # input = prepare_for_ann(to_predict)
+    # result=model.predict(np.array(input, np.float32))
+    # print(result[0])
+
+    result = ""
+
     for p in preds:
+        result = result + p
         print(p, end=" ")
+
+    if result in resultDictionary:
+        resultDictionary[result] += 1
+    else:
+        if result != '':
+            resultDictionary[result] = 1
+
+    print(resultDictionary)
 
     print("---------------------------")
     return cropped_image
@@ -226,6 +343,10 @@ def rectangleness(hull):
 
 if __name__ == '__main__':
     process_video("./data/vid1.MOV")
+
+    print("Najverovatniji rezultat je: \n----------\n"+max(resultDictionary, key=resultDictionary.get)+"\n----------\nPronadjen je u "+str(resultDictionary[max(resultDictionary, key=resultDictionary.get)])+" frejmova.")
+
+
 
     # model = create_model()
     #
