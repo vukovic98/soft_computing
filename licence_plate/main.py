@@ -1,8 +1,6 @@
-import pytesseract as pytesseract
 import imutils as imutils
 import numpy as np
 import cv2
-import matplotlib.pyplot as plt
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
 from tensorflow.keras import optimizers, losses, models, layers
 import hog_svm_train as hog_train
@@ -80,7 +78,6 @@ def create_model():
     model.add(layers.Flatten())
     model.add(layers.Dense(64, activation='relu'))
     model.add(layers.Dense(36, activation='softmax'))
-    # model.summary()
 
     opt = optimizers.Adam()
 
@@ -94,31 +91,16 @@ def create_model():
 def resect_plate(img, hog, svm):
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)  # convert to grey scale
 
-    # plt.imshow(img)
-    # plt.show()
-
     gray = cv2.bilateralFilter(gray, 13, 15, 15)
-
-    # plt.imshow(gray)
-    # plt.show()
 
     lower_white = np.array([95, 95, 95], dtype=np.uint8)
     upper_white = np.array([255, 255, 255], dtype=np.uint8)
 
     thresh1 = cv2.inRange(img, lower_white, upper_white)
 
-    # plt.imshow(thresh1)
-    # plt.show()
-
     edged = cv2.Canny(thresh1, 30, 200)  # Perform Edge detection
 
     dilated = dilate(edged, 7)
-
-    plt.imshow(dilated, cmap="gray")
-    plt.show()
-
-    # plt.imshow(edged)
-    # plt.show()
 
     contours = cv2.findContours(dilated.copy(), cv2.RETR_TREE,
                                 cv2.CHAIN_APPROX_SIMPLE)
@@ -132,8 +114,7 @@ def resect_plate(img, hog, svm):
         x, y, w, h = cv2.boundingRect(c)
         # Draw the rectangle
         cv2.rectangle(img, (x, y), (x + w, y + h), (255, 0, 0), 3)
-        plt.imshow(img)
-        plt.show()
+
         # approximate the contour
         peri = cv2.arcLength(c, True)
         approx = cv2.approxPolyDP(c, 0.04 * peri, True)
@@ -158,13 +139,9 @@ def resect_plate(img, hog, svm):
     for c in hogContours:
         x, y, w, h = cv2.boundingRect(c[0])
         window = img[y:y + h, x:x + w]
-        # plt.imshow(window)
-        # plt.show()
-        print("STARTED PROCESSING")
+
         score = hog_train.process_image(window, hog, svm)
         hogResults.append((c, score))
-        print("Score: " + str(score))
-        print("END OF PROCESSING")
 
     val = max(hogResults, key=lambda item: item[1])[0][1]
 
@@ -191,14 +168,7 @@ def resect_plate(img, hog, svm):
     else:
         secondCrop = cropped_image
 
-    plt.imshow(cropped_image)
-    plt.show()
     return secondCrop
-
-
-alphabet = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
-            "A", "B", "Ć", "Č", "C", "D", "Đ", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "R", "Š",
-            "S", "T", "U", "V", "W", "X", "Y", "Ž", "Z"]
 
 
 def process_video(video_path, hog, svm):
@@ -215,9 +185,7 @@ def process_video(video_path, hog, svm):
     while True:
         frame_num += 1
         ret_val, frame = cap.read()
-        # plt.imshow(frame)
-        # plt.show()
-        # ako frejm nije zahvacen
+
         if not ret_val:
             break
 
@@ -225,10 +193,6 @@ def process_video(video_path, hog, svm):
         if cropped_image is None:
             print("Failed to find plate on this frame.")
         else:
-            # plt.imshow(cropped_image)
-            # plt.show()
-            pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract'
-            print(pytesseract.image_to_string(cropped_image))
             find_characters_contures(cropped_image, model)
 
     cap.release()
@@ -239,9 +203,6 @@ def find_characters_contures(cropped_image, model):
     real_img = cropped_image.copy()
 
     cropped_image = cv2.adaptiveThreshold(cropped_image, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 11, 2)
-
-    # plt.imshow(cropped_image)
-    # plt.show()
 
     contours = cv2.findContours(cropped_image.copy(), cv2.RETR_TREE,
                                 cv2.CHAIN_APPROX_SIMPLE)
@@ -299,43 +260,28 @@ def find_characters_contures(cropped_image, model):
         img_cpy = cv2.addWeighted(img_cpy, 1.5, smoothed, -0.5, 0)
 
         e, img_cpy = cv2.threshold(img_cpy, 80, 255, cv2.THRESH_BINARY)
-        # plt.imshow(real_img)
-        # plt.show()
-        # if i != 0:
+
         mask = np.zeros(img_cpy.shape, np.uint8)
         cv2.drawContours(mask, [approx], 0, 255, -1, )
         cv2.bitwise_and(img_cpy, img_cpy, mask=mask)
-        # plt.imshow(img_cpy)
-        # plt.show()
+
         (x, y) = np.where(mask == 255)
         (topx, topy) = (np.min(x), np.min(y))
         (bottomx, bottomy) = (np.max(x), np.max(y))
         img_cpy = img_cpy[topx:bottomx + 1, topy:bottomy + 1]
-        # img_cpy = cv2.cvtColor(img_cpy,cv2.COLOR_GRAY2RGB)
-        # plt.imshow(img_cpy)
-        # plt.show()
+
         img_cpy = erode(img_cpy, 1)
-        # plt.imshow(img_cpy)
-        # plt.show()
+
         img_cpy = cv2.resize(img_cpy, (img_cols, img_rows))
         img_cpy = np.reshape(img_cpy, (1, img_rows, img_cols, 1))
         to_predict.append(img_cpy)
 
         prediction = model.predict(img_cpy)
 
-        # plt.imshow(img_cpy)
-        # plt.show()
         try:
-            print(dictionary[np.where(prediction[0] == 1)[0][0]])
             preds.append(dictionary[np.where(prediction[0] == 1)[0][0]])
         except:
             continue
-        # else:
-        #   i = i + 1
-
-    # input = prepare_for_ann(to_predict)
-    # result=model.predict(np.array(input, np.float32))
-    # print(result[0])
 
     result = ""
 
@@ -385,7 +331,7 @@ def rectangleness(hull):
 if __name__ == '__main__':
     hog, svm = hog_train.trainHOG()
 
-    process_video("./data/BP005TI.mp4", hog, svm)
+    process_video("./data/1RUZ907.MOV", hog, svm)
 
     print("Najverovatniji rezultat je: \n----------\n" + max(resultDictionary,
                                                              key=resultDictionary.get) + "\n----------\nPronadjen je u " + str(
